@@ -88,7 +88,7 @@ def primitive_tester(env, objects, primitives, primitives_args):
 
 
 ROBOTS_UNDER_TEST = ["Tiago", "R1"]
-if th.cuda.is_available() and th.cuda.get_device_capability(0) == (12, 0):
+if th.cuda.is_available() and th.cuda.get_device_capability(0)[0] == 12:
     # TODO: Currently for 50 series, only Default embodiment works for Tiago, and for R1Pro, all embodiment except Default work.
     # Here, we remove Tiago for testing.
     ROBOTS_UNDER_TEST = ["R1"]

@@ -161,14 +161,17 @@ class CuRoboMotionGenerator:
                 Therefore, we automatically exclude these incompatible embodiments when we detect such GPU is being used. 
             """
         )
-        if th.cuda.get_device_capability(device) == (12, 0):
+        # Blackwell sm_12x triggers a cuRobo illegal-memory bug in lbfgs_step_cu for the
+        # incompatible embodiments below: (12,0)=RTX 50-series, (12,1)=GB10/DGX Spark.
+        # Match the whole sm_12x family so GB10 (12,1) gets the same exclusion as (12,0).
+        if th.cuda.get_device_capability(device)[0] == 12:
             if robot.model == "tiago":
-                print("Detected you are using Tiago with cuda architecture 12.0 GPU: excluding non-DEFAULT embodiment.")
+                print("Detected you are using Tiago with Blackwell sm_12x GPU: excluding non-DEFAULT embodiment.")
                 robot_cfg_path_dict = {
                     CuRoboEmbodimentSelection.DEFAULT: robot_cfg_path_dict[CuRoboEmbodimentSelection.DEFAULT]
                 }
             elif robot.model == "r1pro":
-                print("Detected you are using R1Pro with cuda architecture 12.0 GPU: excluding DEFAULT embodiment.")
+                print("Detected you are using R1Pro with Blackwell sm_12x GPU: excluding DEFAULT embodiment.")
                 robot_cfg_path_dict = {
                     k: v for k, v in robot_cfg_path_dict.items() if k != CuRoboEmbodimentSelection.DEFAULT
                 }

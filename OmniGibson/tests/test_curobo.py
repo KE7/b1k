@@ -269,7 +269,7 @@ def test_curobo():
         },
     ]
     for robot_cfg in robot_cfgs:
-        if th.cuda.is_available() and th.cuda.get_device_capability(0) == (12, 0):
+        if th.cuda.is_available() and th.cuda.get_device_capability(0)[0] == 12:
             # TODO [Wensi]: Check whether this is still true for future releases.
             # Currently (v3.8.0), for cuda architecture 12.0 (e.g. RTX 50-series), using Default embodiment for Tiago or non-DEFAULT embodiment for R1Pro
             #     will raise CUDA illegal memory access error during mg.warmup() due to cuRobo compatibility issues.
