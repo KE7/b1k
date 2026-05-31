@@ -18,6 +18,19 @@ th.backends.cudnn.benchmark = True
 th.backends.cuda.matmul.allow_tf32 = True
 th.backends.cudnn.allow_tf32 = True
 
+# Blackwell sm_12x (RTX 50-series / GB10 DGX Spark) with Isaac Sim's bundled cu128 torch:
+# torch's TensorExpr (NNC) JIT fuser emits NVRTC kernels whose -arch (sm_121) the cu128
+# NVRTC rejects ("invalid value for --gpu-architecture"). This otherwise crashes at the
+# first curobo motion-gen import (normalize_quaternion -> fused_eq_where_div_mul). Disable
+# the GPU JIT fuser on these GPUs so the trivial elementwise ops run eager. Runtime flag
+# only -- does NOT swap torch or change the CUDA toolkit.
+if th.cuda.is_available() and th.cuda.get_device_capability()[0] == 12:
+    try:
+        th._C._jit_set_texpr_fuser_enabled(False)
+        th._C._jit_override_can_fuse_on_gpu(False)
+    except Exception:
+        pass
+
 # Create settings for this module
 m = create_module_macros(module_path=__file__)
 
@@ -321,7 +334,16 @@ class CuRoboMotionGenerator:
                 
         world = lazy.curobo.geom.types.WorldConfig(**obstacles)
         world = world.get_collision_check_world()
-        self.mg[CuRoboEmbodimentSelection.DEFAULT].update_world(world)
+        # The world collision checker is shared across all MotionGen instances (see __init__),
+        # so updating it via any present embodiment updates collision-checking for all of them.
+        # On Blackwell sm_12x the DEFAULT embodiment is excluded for R1Pro (see the guard above),
+        # so fall back to any available embodiment instead of hard-coding DEFAULT (avoids KeyError).
+        world_emb_sel = (
+            CuRoboEmbodimentSelection.DEFAULT
+            if CuRoboEmbodimentSelection.DEFAULT in self.mg
+            else next(iter(self.mg))
+        )
+        self.mg[world_emb_sel].update_world(world)
 
     def update_obstacles(self, ignore_objects=None):
         """
@@ -385,7 +407,16 @@ class CuRoboMotionGenerator:
 
         world = lazy.curobo.geom.types.WorldConfig(**obstacles)
         world = world.get_collision_check_world()
-        self.mg[CuRoboEmbodimentSelection.DEFAULT].update_world(world)
+        # The world collision checker is shared across all MotionGen instances (see __init__),
+        # so updating it via any present embodiment updates collision-checking for all of them.
+        # On Blackwell sm_12x the DEFAULT embodiment is excluded for R1Pro (see the guard above),
+        # so fall back to any available embodiment instead of hard-coding DEFAULT (avoids KeyError).
+        world_emb_sel = (
+            CuRoboEmbodimentSelection.DEFAULT
+            if CuRoboEmbodimentSelection.DEFAULT in self.mg
+            else next(iter(self.mg))
+        )
+        self.mg[world_emb_sel].update_world(world)
 
     def check_collisions(
         self,
