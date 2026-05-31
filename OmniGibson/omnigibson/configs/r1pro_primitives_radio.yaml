@@ -47,7 +47,7 @@ scene:
 
 robots:
   - type: R1Pro
-    obs_modalities: [rgb, depth_linear, proprio, seg_instance]
+    obs_modalities: [rgb, depth_linear, proprio, seg_instance_id]
     position: [5.0, 4.3, 0.00]
     include_sensor_names: null
     exclude_sensor_names: null
