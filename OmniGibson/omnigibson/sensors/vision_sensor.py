@@ -707,7 +707,7 @@ class VisionSensor(BaseSensor):
             og.sim.render()
             _warmup_renders += 1
             data = self._annotators["camera_params"].get_data()
-        # Grab and return the parameters
+        # Return the (now-warm) parameters
         return data
 
     @property
