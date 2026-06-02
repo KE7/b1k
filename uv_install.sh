@@ -4,8 +4,7 @@ set -e
 # =========================
 # Config
 # =========================
-CUDA_VERSION="12.4"
-PYTHON_VERSION="3.11" # Isaac Sim 5.1 (kit 107, aarch64 source build) is cp311
+PYTHON_VERSION="3.11" # Isaac Sim 5.1 is cp311 on both arches (aarch64 source build / x86_64 wheels)
 WORKDIR=$(pwd)
 
 # Optional flags
@@ -53,7 +52,7 @@ command -v uv >/dev/null || {
 }
 
 python --version | grep -q "Python ${PYTHON_VERSION}" || {
-  echo "ERROR: Python ${PYTHON_VERSION} required (Isaac Sim 5.1 source build is cp311)"
+  echo "ERROR: Python ${PYTHON_VERSION} required (Isaac Sim 5.1 is cp311 on both arches: aarch64 source build / x86_64 wheels)"
   exit 1
 }
 
@@ -98,9 +97,8 @@ if [[ "$ISAAC_ARCH" == "x86_64" ]]; then
 fi
 
 if [[ "$ISAAC_ARCH" == "aarch64" ]]; then
-# Isaac Sim env: on aarch64 we REUSE the source-built Isaac Sim 5.1 instead of
-# downloading x86_64 cp310 wheels, so ISAAC_PATH must point at a source-built Isaac
-# Sim 5.1 release tree. We do NOT hardcode any machine-specific/home path here.
+# Isaac Sim env: on aarch64 we REUSE the source-built Isaac Sim 5.1 release tree, so
+# ISAAC_PATH must point at it. We do NOT hardcode any machine-specific/home path here.
 # Resolution order:
 #   1. ISAAC_PATH from the environment (preferred -- fully overridable + portable).
 #   2. Auto-detect a source build at a standard repo-relative location, if present.
@@ -165,8 +163,7 @@ else
   # the [all,extscache] extras pulls every isaacsim.* component + the extscache
   # bundles (the same component set the aarch64 source build provides). cp311 /
   # manylinux_2_35_x86_64 wheels are published on pypi.nvidia.com. NOTE: the 5.1
-  # wheels are manylinux_2_35, so they require glibc >= 2.35 (Ubuntu 22.04+); unlike
-  # the old 4.5 (manylinux_2_34) block there is no manylinux_2_31 fallback rename.
+  # wheels are manylinux_2_35, so they require glibc >= 2.35 (Ubuntu 22.04+).
   uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
 
   # =========================
@@ -205,7 +202,7 @@ print("omnigibson", omnigibson.__version__)
 import isaacsim
 print("✓ OmniGibson and Isaac Sim importable")
 EOF
-  ) || echo "WARN: import verify failed (continuing; will re-check in Phase 3 with full env wiring)"
+  ) || echo "WARN: import verify failed (continuing; verify after full env wiring in a later step)"
 else
   # x86_64: the wheels install a self-contained Isaac Sim env, so a plain import
   # verifies the install (non-fatal so later installs still run).
