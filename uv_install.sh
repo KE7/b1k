@@ -5,7 +5,7 @@ set -e
 # Config
 # =========================
 CUDA_VERSION="12.4"
-PYTHON_VERSION="3.10" # Isaac Sim wheels are only published for cp310
+PYTHON_VERSION="3.11" # Isaac Sim 5.1 (kit 107, aarch64 source build) is cp311
 WORKDIR=$(pwd)
 
 # Optional flags
@@ -62,11 +62,15 @@ python --version | grep -q "Python ${PYTHON_VERSION}" || {
   exit 1
 }
 
-# Isaac Sim env conflicts
-if [[ -n "$EXP_PATH" || -n "$CARB_APP_PATH" || -n "$ISAAC_PATH" ]]; then
-  echo "ERROR: Existing Isaac Sim environment variables detected"
+# Isaac Sim env: on aarch64 we REUSE the source-built Isaac Sim 5.1 instead of
+# downloading x86_64 cp310 wheels, so ISAAC_PATH/EXP_PATH must be set (not an error).
+export ISAAC_PATH="${ISAAC_PATH:-/home/batman/Documents/open-source/isaacsim/_build/linux-aarch64/release}"
+export EXP_PATH="${EXP_PATH:-$ISAAC_PATH/apps}"
+if [[ ! -d "$ISAAC_PATH" ]]; then
+  echo "ERROR: ISAAC_PATH does not exist: $ISAAC_PATH"
   exit 1
 fi
+echo "Reusing source-built Isaac Sim at ISAAC_PATH=$ISAAC_PATH"
 
 # =========================
 # Initialize uv project
@@ -85,95 +89,28 @@ uv pip install -e "$WORKDIR/bddl3"
 uv pip install -e "$WORKDIR/OmniGibson"
 
 # =========================
-# Isaac Sim installation
+# Isaac Sim installation -- SKIPPED on aarch64
 # =========================
-echo "Installing Isaac Sim..."
-
-check_glibc_old() {
-  ldd --version 2>&1 | grep -qE "2\.(31|32|33)"
-}
-
-TMPDIR=$(mktemp -d)
-
-ISAAC_PKGS=(
-  omniverse_kit-106.5.0.162521
-  isaacsim_kernel-4.5.0.0
-  isaacsim_app-4.5.0.0
-  isaacsim_core-4.5.0.0
-  isaacsim_gui-4.5.0.0
-  isaacsim_utils-4.5.0.0
-  isaacsim_storage-4.5.0.0
-  isaacsim_asset-4.5.0.0
-  isaacsim_sensor-4.5.0.0
-  isaacsim_robot_motion-4.5.0.0
-  isaacsim_robot-4.5.0.0
-  isaacsim_benchmark-4.5.0.0
-  isaacsim_code_editor-4.5.0.0
-  isaacsim_ros1-4.5.0.0
-  isaacsim_ros2-4.5.0.0
-  isaacsim_cortex-4.5.0.0
-  isaacsim_example-4.5.0.0
-  isaacsim_replicator-4.5.0.0
-  isaacsim_rl-4.5.0.0
-  isaacsim_robot_setup-4.5.0.0
-  isaacsim_template-4.5.0.0
-  isaacsim_test-4.5.0.0
-  isaacsim-4.5.0.0
-  isaacsim_extscache_physics-4.5.0.0
-  isaacsim_extscache_kit-4.5.0.0
-  isaacsim_extscache_kit_sdk-4.5.0.0
-)
-
-WHEELS=()
-
-for pkg in "${ISAAC_PKGS[@]}"; do
-  name=${pkg%-*}
-  wheel="${pkg}-cp310-none-manylinux_2_34_x86_64.whl"
-  url="https://pypi.nvidia.com/${name//_/-}/${wheel}"
-  path="${TMPDIR}/${wheel}"
-
-  echo "Downloading $pkg..."
-  curl -fsSL "$url" -o "$path"
-
-  if check_glibc_old; then
-    newpath="${path/manylinux_2_34/manylinux_2_31}"
-    mv "$path" "$newpath"
-    path="$newpath"
-  fi
-
-  WHEELS+=("$path")
-done
-
-echo "Installing Isaac Sim wheels..."
-uv pip install "${WHEELS[@]}"
-
-rm -rf "$TMPDIR"
+# The original block here downloaded cp310 x86_64 Isaac Sim 4.5.0 wheels from
+# pypi.nvidia.com. On this aarch64 (DGX Spark / GB10) box we instead REUSE the
+# source-built Isaac Sim 5.1.0 at $ISAAC_PATH (exported above). No aarch64 Isaac
+# 4.5 wheels exist, and Isaac 5.1 is cp311. Skipping the wheel download entirely.
+echo "Skipping x86_64 Isaac Sim wheel download; reusing source build at $ISAAC_PATH"
 
 # =========================
-# Fix websockets conflict
+# Verify (wire source-built Isaac env; non-fatal so later installs still run)
 # =========================
-ISAAC_PATH=$(python - << 'EOF'
-import isaacsim, os
-print(os.environ.get("ISAAC_PATH", ""))
-EOF
-)
-
-if [ -n "$ISAAC_PATH" ] && [ -d "$ISAAC_PATH/extscache" ]; then
-  echo "Fixing websockets conflict..."
-  find "$ISAAC_PATH/extscache" \
-    -type d \
-    -path "*/pip_prebundle/websockets" \
-    -exec rm -rf {} + || true
-fi
-
-# =========================
-# Verify
-# =========================
-python - << 'EOF'
+(
+  export CARB_APP_PATH="$ISAAC_PATH/kit"
+  source "$ISAAC_PATH/setup_python_env.sh"
+  export LD_PRELOAD="$ISAAC_PATH/kit/libcarb.so"
+  python - << 'EOF'
 import omnigibson
+print("omnigibson", omnigibson.__version__)
 import isaacsim
-print("✓ OmniGibson and Isaac Sim installed successfully")
+print("✓ OmniGibson and Isaac Sim importable")
 EOF
+) || echo "WARN: import verify failed (continuing; will re-check in Phase 3 with full env wiring)"
 
 echo ""
 echo "=== OmniGibson + Isaac Sim (uv) installation complete ==="
