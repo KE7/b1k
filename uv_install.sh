@@ -63,25 +63,41 @@ python --version | grep -q "Python ${PYTHON_VERSION}" || {
 }
 
 # =========================
-# Architecture gate
+# Architecture gate / dispatch
 # =========================
-# This installer is the aarch64 (DGX Spark / GB10) PORT: it REUSES a source-built
-# Isaac Sim 5.1 (cp311) and intentionally does NOT download the x86_64 cp310
-# Isaac Sim 4.5 wheels that the upstream installer uses. Those two flows differ in
-# Python version, Isaac version, and ISAAC_PATH handling, so we do NOT silently run
-# the aarch64 path on x86_64. Gate explicitly by architecture and fail loudly with a
-# pointer to the upstream wheel-based installer rather than silently mis-installing.
+# Unified installer for OmniGibson 3.8.0 / Isaac Sim 5.1 / Python 3.11 (cp311) on
+# BOTH aarch64 and x86_64. The two arches differ ONLY in how Isaac Sim 5.1 is
+# obtained:
+#   - aarch64 (DGX Spark / GB10): REUSE a source-built Isaac Sim 5.1 release tree at
+#     $ISAAC_PATH. No aarch64 Isaac Sim wheels are published, so it is built from
+#     source and reused here.
+#   - x86_64: install the published Isaac Sim 5.1 cp311 wheels from pypi.nvidia.com
+#     ("isaacsim[all,extscache]==5.1.0"). manylinux_2_35_x86_64 / cp311.
+# Both arches converge on Isaac Sim 5.1 / cp311, so PYTHON_VERSION="3.11" (Config,
+# above) is correct for both.
 ARCH="$(uname -m)"
-if [[ "$ARCH" != "aarch64" && "$ARCH" != "arm64" ]]; then
-  echo "ERROR: This is the aarch64 source-build port of uv_install.sh (Isaac Sim 5.1, cp311)."
-  echo "       Detected architecture: $ARCH (not aarch64)."
-  echo "       On x86_64, use the upstream/base uv_install.sh, which downloads the"
-  echo "       x86_64 cp310 Isaac Sim wheels from pypi.nvidia.com instead of reusing a"
-  echo "       source build. This script will not run on $ARCH to avoid a silent"
-  echo "       mis-install. Aborting."
-  exit 1
+case "$ARCH" in
+  aarch64|arm64) ISAAC_ARCH="aarch64" ;;
+  x86_64)        ISAAC_ARCH="x86_64" ;;
+  *)
+    echo "ERROR: Unsupported architecture: $ARCH (expected aarch64/arm64 or x86_64)."
+    exit 1
+    ;;
+esac
+
+if [[ "$ISAAC_ARCH" == "x86_64" ]]; then
+  # x86_64 installs Isaac Sim 5.1 wheels, which manage ISAAC_PATH/EXP_PATH/CARB_APP_PATH
+  # themselves on import. A pre-set Isaac Sim env would collide with the wheel install,
+  # so refuse it (mirrors the upstream x86_64 wheel installer's env-conflict check).
+  if [[ -n "${EXP_PATH:-}" || -n "${CARB_APP_PATH:-}" || -n "${ISAAC_PATH:-}" ]]; then
+    echo "ERROR: Existing Isaac Sim environment variables detected (EXP_PATH/CARB_APP_PATH/ISAAC_PATH)."
+    echo "       The x86_64 wheel install manages these itself; unset them and re-run."
+    exit 1
+  fi
+  echo "x86_64 detected: will install Isaac Sim 5.1 cp311 wheels from pypi.nvidia.com."
 fi
 
+if [[ "$ISAAC_ARCH" == "aarch64" ]]; then
 # Isaac Sim env: on aarch64 we REUSE the source-built Isaac Sim 5.1 instead of
 # downloading x86_64 cp310 wheels, so ISAAC_PATH must point at a source-built Isaac
 # Sim 5.1 release tree. We do NOT hardcode any machine-specific/home path here.
@@ -115,6 +131,7 @@ if [[ ! -d "$ISAAC_PATH" ]]; then
   exit 1
 fi
 echo "Reusing source-built Isaac Sim at ISAAC_PATH=$ISAAC_PATH"
+fi
 
 # =========================
 # Initialize uv project
@@ -133,28 +150,72 @@ uv pip install -e "$WORKDIR/bddl3"
 uv pip install -e "$WORKDIR/OmniGibson"
 
 # =========================
-# Isaac Sim installation -- SKIPPED on aarch64
+# Isaac Sim 5.1 installation (arch-dependent)
 # =========================
-# The original block here downloaded cp310 x86_64 Isaac Sim 4.5.0 wheels from
-# pypi.nvidia.com. On this aarch64 (DGX Spark / GB10) box we instead REUSE the
-# source-built Isaac Sim 5.1.0 at $ISAAC_PATH (exported above). No aarch64 Isaac
-# 4.5 wheels exist, and Isaac 5.1 is cp311. Skipping the wheel download entirely.
-echo "Skipping x86_64 Isaac Sim wheel download; reusing source build at $ISAAC_PATH"
+# Both arches target Isaac Sim 5.1 / cp311 (OmniGibson 3.8.0); they differ only in
+# how Isaac Sim is obtained:
+#   - aarch64: REUSE the source-built Isaac Sim 5.1.0 at $ISAAC_PATH (resolved above).
+#     No aarch64 Isaac Sim wheels are published, so the wheel download is skipped.
+#   - x86_64: install the published Isaac Sim 5.1 cp311 wheels from pypi.nvidia.com.
+if [[ "$ISAAC_ARCH" == "aarch64" ]]; then
+  echo "Skipping x86_64 Isaac Sim wheel download; reusing source build at $ISAAC_PATH"
+else
+  echo "Installing Isaac Sim 5.1 (cp311 wheels) from pypi.nvidia.com..."
+  # NVIDIA's documented Isaac Sim 5.1 pip install: the "isaacsim" meta-package with
+  # the [all,extscache] extras pulls every isaacsim.* component + the extscache
+  # bundles (the same component set the aarch64 source build provides). cp311 /
+  # manylinux_2_35_x86_64 wheels are published on pypi.nvidia.com. NOTE: the 5.1
+  # wheels are manylinux_2_35, so they require glibc >= 2.35 (Ubuntu 22.04+); unlike
+  # the old 4.5 (manylinux_2_34) block there is no manylinux_2_31 fallback rename.
+  uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
+
+  # =========================
+  # Fix websockets conflict
+  # =========================
+  # The Isaac extscache bundles a pip_prebundle websockets that collides with the one
+  # OmniGibson/uv installs. Remove the bundled copy (same cleanup the original x86_64
+  # wheel install performed). ISAAC_PATH is set as a side effect of importing the
+  # freshly-installed isaacsim package.
+  ISAAC_PATH=$(python - << 'EOF'
+import isaacsim, os
+print(os.environ.get("ISAAC_PATH", ""))
+EOF
+)
+  if [ -n "$ISAAC_PATH" ] && [ -d "$ISAAC_PATH/extscache" ]; then
+    echo "Fixing websockets conflict..."
+    find "$ISAAC_PATH/extscache" \
+      -type d \
+      -path "*/pip_prebundle/websockets" \
+      -exec rm -rf {} + || true
+  fi
+fi
 
 # =========================
-# Verify (wire source-built Isaac env; non-fatal so later installs still run)
+# Verify
 # =========================
-(
-  export CARB_APP_PATH="$ISAAC_PATH/kit"
-  source "$ISAAC_PATH/setup_python_env.sh"
-  export LD_PRELOAD="$ISAAC_PATH/kit/libcarb.so"
-  python - << 'EOF'
+if [[ "$ISAAC_ARCH" == "aarch64" ]]; then
+  # aarch64: wire the source-built Isaac env (non-fatal so later installs still run)
+  (
+    export CARB_APP_PATH="$ISAAC_PATH/kit"
+    source "$ISAAC_PATH/setup_python_env.sh"
+    export LD_PRELOAD="$ISAAC_PATH/kit/libcarb.so"
+    python - << 'EOF'
 import omnigibson
 print("omnigibson", omnigibson.__version__)
 import isaacsim
 print("✓ OmniGibson and Isaac Sim importable")
 EOF
-) || echo "WARN: import verify failed (continuing; will re-check in Phase 3 with full env wiring)"
+  ) || echo "WARN: import verify failed (continuing; will re-check in Phase 3 with full env wiring)"
+else
+  # x86_64: the wheels install a self-contained Isaac Sim env, so a plain import
+  # verifies the install (non-fatal so later installs still run).
+  python - << 'EOF' || echo "WARN: import verify failed (continuing)"
+import omnigibson
+print("omnigibson", omnigibson.__version__)
+import isaacsim
+print("✓ OmniGibson and Isaac Sim importable")
+EOF
+fi
 
 echo ""
 echo "=== OmniGibson + Isaac Sim (uv) installation complete ==="
