@@ -90,6 +90,15 @@ m.JOINT_CONTROL_MIN_ACTION = 0.0
 m.MAX_ALLOWED_JOINT_ERROR_FOR_LINEAR_MOTION = math.radians(45)
 m.TIME_BEFORE_JOINT_STUCK_CHECK = 1.0
 
+# WORKAROUND (upstream base-collision geometry over-conservativeness — see base_geom_upstream_rca.md):
+# For some robots the upstream cuRobo BASE collision spheres are conservative enough that planning
+# BASE-only nav IK against the full scene-mesh collision world rejects otherwise-reachable base poses
+# (obstacle-enabled IK_FAIL). Until a principled base-collision fix lands upstream, BASE-nav planning
+# for the affected models ignores obstacles. This is a reversible escape hatch using the existing
+# ignore_all_obstacles plumbing, NOT a general policy. Models default-on are listed here; the behavior
+# is overridable per-instance via StarterSemanticActionPrimitives(ignore_obstacles_for_base_nav=...).
+m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS = ("r1pro",)
+
 log = create_module_logger(module_name=__name__)
 
 
@@ -128,6 +137,7 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
         curobo_batch_size=3,
         debug_visual_marker=None,
         skip_curobo_initilization=False,
+        ignore_obstacles_for_base_nav=None,
     ):
         """
         Initializes a StarterSemanticActionPrimitives generator.
@@ -143,6 +153,12 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             curobo_batch_size (int): The batch size for curobo motion planning and collision checking. Defaults to 3.
             debug_visual_marker (PrimitiveObject): The object to use for debug visual markers. Defaults to None.
             skip_curobo_initilization (bool): Whether to skip curobo initialization. Defaults to False.
+            ignore_obstacles_for_base_nav (None or bool): Workaround flag for upstream base-collision
+                geometry over-conservativeness (see base_geom_upstream_rca.md). When True, BASE-only nav
+                planning ignores scene obstacles (a reversible escape hatch around obstacle-enabled
+                base IK_FAILs). When None (default), it is enabled only for models known to be affected
+                (m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS, currently r1pro). Set False to force the
+                principled obstacle-aware base planning.
         """
         log.warning(
             "The StarterSemanticActionPrimitive is a work-in-progress and is only provided as an example. "
@@ -170,6 +186,13 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             )
         )
 
+        # Workaround flag: ignore obstacles for BASE-only nav planning (upstream base-geom
+        # over-conservativeness, see base_geom_upstream_rca.md). Defaults on for affected models.
+        self._ignore_obstacles_for_base_nav = (
+            self.robot.model in m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS
+            if ignore_obstacles_for_base_nav is None
+            else ignore_obstacles_for_base_nav
+        )
         self._task_relevant_objects_only = task_relevant_objects_only
 
         self._enable_head_tracking = enable_head_tracking
@@ -1582,9 +1605,12 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             self.debug_visual_marker.set_position_orientation(*pose_3d)
         target_pos = {self.robot.base_footprint_link_name: pose_3d[0]}
         target_quat = {self.robot.base_footprint_link_name: pose_3d[1]}
-        if self.robot.model == "r1pro":
-            # The full scene mesh world can overconstrain R1Pro BASE-only IK and reject
-            # otherwise reachable base poses.
+        if self._ignore_obstacles_for_base_nav:
+            # WORKAROUND (upstream base-collision geometry over-conservativeness, see
+            # base_geom_upstream_rca.md): the full scene-mesh collision world can overconstrain
+            # BASE-only IK and reject otherwise-reachable base poses (obstacle-enabled IK_FAIL).
+            # Reversible escape hatch via ignore_all_obstacles; gated by a config flag that defaults
+            # on only for affected models (m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS, currently r1pro).
             ignore_all_obstacles = True
         q_traj = self._plan_joint_motion(
             target_pos,

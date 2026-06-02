@@ -1,6 +1,38 @@
 """
 cuMotion-backed, drop-in replacement for ``CuRoboMotionGenerator``.
 
+==============================================================================
+LIMITATION — ARM-ONLY. DO NOT USE AS A BASE-NAV MOTION-GENERATOR BACKEND.
+==============================================================================
+This shim is an ARM motion generator only. It can plan for the R1Pro (and
+similar) ARM chain, but it CANNOT be used as the backend for BASE / holonomic
+base navigation (``CuRoboEmbodimentSelection.BASE`` / ``_navigate_to_pose``).
+
+Why the BASE backend cannot even be constructed (verified — see ``cumotion_swap.md``
+/ the cumotion-planner-probe runs):
+  * R1Pro's holonomic base is realized by SYNTHETIC virtual joints
+    ``base_footprint_x`` / ``base_footprint_y`` / ``base_footprint_rz`` (plus the
+    locked ``base_footprint_z/rx/ry``). These joints exist ONLY in the robot USD
+    and in ``robot.get_joint_positions()`` — they are present in NO URDF and in NO
+    XRDF.
+  * cuMotion builds its robot model from URDF + XRDF via
+    ``cm.load_robot_from_file(xrdf, urdf)``. There is no holonomic / planar-joint
+    primitive to represent the base DOFs, and writing those synthetic joints into
+    the XRDF (e.g. as cspace or as locked ``default_joint_positions``) makes the
+    load fail hard:
+        RuntimeError: ... URDF does not include a joint with name
+        'base_footprint_z_joint'
+  * This shim therefore FILTERS the ``base_footprint_*`` joints out of the active
+    chain and out of locked-joint handling (see ``update_locked_joints`` and
+    ``_to_base_frame``), so it can construct an ARM-only cuMotion robot. The base
+    pose is consumed only as a planning FRAME (targets expressed in the base
+    frame), never as plannable DOFs.
+  * Net: there is no cuMotion robot that exposes the base as movable joints, so a
+    BASE motion generator simply cannot be built from this path. Base navigation
+    must keep using the existing cuRobo BASE backend; only ARM planning may be
+    swapped to this shim.
+==============================================================================
+
 This shim presents the *same public surface* that cap-x / OmniGibson consume from
 ``omnigibson.action_primitives.curobo.CuRoboMotionGenerator`` (constructor +
 ``batch_size``, ``ee_link``/``base_link``, ``update_obstacles``,

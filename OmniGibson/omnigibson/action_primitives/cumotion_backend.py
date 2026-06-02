@@ -8,6 +8,13 @@ torch-cu128 illegal-memory-access crash class.  The torch-facing,
 CuRoboMotionGenerator-compatible shim lives in ``cumotion_motion_generator.py``
 and delegates to this backend.
 
+ARM-ONLY (``CuMotionArmBackend``): this backend plans for the robot ARM chain only.
+It CANNOT serve as a BASE / holonomic-base navigation backend — the R1Pro synthetic
+base joints (``base_footprint_x/y/rz``) exist only in the USD, not in any URDF/XRDF,
+so ``cm.load_robot_from_file`` cannot build a robot that exposes the base as movable
+DOFs (it raises ``RuntimeError: ... URDF does not include a joint ...``). See the
+prominent limitation header in ``cumotion_motion_generator.py`` and ``cumotion_swap.md``.
+
 Key design facts (verified on this box, cuMotion 1.1.0 cu13 aarch64 cp311):
   * cuMotion's Python world model exposes ONLY primitive obstacle types
     ``Obstacle.Type.{SPHERE, CUBOID, CAPSULE}``.  There is **no mesh type and no

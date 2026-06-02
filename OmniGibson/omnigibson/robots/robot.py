@@ -3931,7 +3931,18 @@ class Robot(USDObject, GymObservable):
             if ControllerView.is_controller_type(group_key, HolonomicBaseJointController):
                 # Holonomic base controller expects delta (x, y, rz) in robot base footprint link frame.
                 # The action-primitive path passes an absolute world-frame base target, so compare it to
-                # the current world pose of the base footprint link before feeding the local delta to the controller.
+                # the current world pose of the base footprint link before feeding the local delta to the
+                # controller.
+                #
+                # NOTE (scope): this branch is general to ALL holonomic-base robots (R1, R1Pro, Tiago, ...),
+                # not R1Pro-specific. The OG 3.7.2 -> 3.8.0 port regressed this path by subtracting the
+                # root-frame virtual base-joint pose (self.get_joint_positions()[self.base_idx]) from a target
+                # the caller had already converted to world frame, producing a fixed root/world x/y offset
+                # (the observed 0.418 m base-exec shortfall). Restoring the world-frame delta against
+                # get_position_orientation() matches the world-frame target the action-primitive path now
+                # feeds and is what 3.7.2's HolonomicBaseRobot.q_to_action did, so it fixes — rather than
+                # regresses — every holonomic-base robot. yaw is now also taken in world frame (vs 3.7.2's
+                # root-frame rz), which is consistent with the world-frame target for a pure-z base rotation.
                 body_pos, body_quat = self.get_position_orientation()
                 body_pos = body_pos.to(dtype=command.dtype, device=command.device)
                 body_quat = body_quat.to(dtype=command.dtype, device=command.device)
