@@ -1582,6 +1582,10 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             self.debug_visual_marker.set_position_orientation(*pose_3d)
         target_pos = {self.robot.base_footprint_link_name: pose_3d[0]}
         target_quat = {self.robot.base_footprint_link_name: pose_3d[1]}
+        if self.robot.model == "r1pro":
+            # The full scene mesh world can overconstrain R1Pro BASE-only IK and reject
+            # otherwise reachable base poses.
+            ignore_all_obstacles = True
         q_traj = self._plan_joint_motion(
             target_pos,
             target_quat,

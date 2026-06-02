@@ -674,8 +674,32 @@ class VisionSensor(BaseSensor):
             # Requires 4 render updates for camera params annotator to become active
             for _ in range(4):
                 og.sim.render()
+        # Grab the parameters
+        data = self._annotators["camera_params"].get_data()
+        # cap-x fix (headless OG 3.8.0 / Isaac 5.1): the camera_params (OgnCameraParamsOpenCV)
+        # annotator can return a stale/degenerate frame (renderProductResolution == [0, 0],
+        # null cameraProjection) on its first read even after the 4 warmup renders above. This
+        # is a flaky render-warmup race in headless mode (RGB on the same render product renders
+        # fine), and it makes `intrinsic_matrix` raise its degenerate-matrix assertion
+        # nondeterministically (observed on the R1Pro wrist realsense cameras). Step the renderer
+        # a bounded number of extra times until the resolution is populated. No-op once warm, so
+        # this adds no steady-state cost.
+        def _camera_params_degenerate(d):
+            rp = d.get("renderProductResolution", None)
+            if rp is None:
+                return True
+            try:
+                return any(int(x) == 0 for x in rp)
+            except TypeError:
+                return True
+
+        _warmup_renders = 0
+        while _camera_params_degenerate(data) and _warmup_renders < 30:
+            og.sim.render()
+            _warmup_renders += 1
+            data = self._annotators["camera_params"].get_data()
         # Grab and return the parameters
-        return self._annotators["camera_params"].get_data()
+        return data
 
     @property
     def viewer_visibility(self):

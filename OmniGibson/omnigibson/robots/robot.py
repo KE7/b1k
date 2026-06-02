@@ -3929,20 +3929,24 @@ class Robot(USDObject, GymObservable):
             ), f"Controller [{name}] should be a JointController/HolonomicBaseJointController with use_delta_commands=False!"
             command = q[ControllerView.get_dof_idx(group_key)]
             if ControllerView.is_controller_type(group_key, HolonomicBaseJointController):
-                # Holonomnic base controller expects delta (x, y, rz) in robot base footprint link frame
-                # However, q actions are in absolute (x, y, rz) in robot root frame, so we need to convert them before feeding to the controller
-                base_joint_pos = self.get_joint_positions()[self.base_idx]
-                cur_rz_joint_pos = base_joint_pos[5]
-                delta_q = wrap_angle(command[2] - cur_rz_joint_pos)
+                # Holonomic base controller expects delta (x, y, rz) in robot base footprint link frame.
+                # The action-primitive path passes an absolute world-frame base target, so compare it to
+                # the current world pose of the base footprint link before feeding the local delta to the controller.
+                body_pos, body_quat = self.get_position_orientation()
+                body_pos = body_pos.to(dtype=command.dtype, device=command.device)
+                body_quat = body_quat.to(dtype=command.dtype, device=command.device)
+                body_euler = T.mat2euler_intrinsic(T.quat2mat(body_quat))
+                delta_q = wrap_angle(command[2] - body_euler[2])
 
                 # For translation, we need to convert the command to the robot local frame
-                body_pos = base_joint_pos[:3]
-                body_quat = T.mat2quat(T.euler_intrinsic2mat(base_joint_pos[3:6]))
-                canonical_pos = th.tensor([command[0], command[1], body_pos[2]], dtype=th.float32)
+                canonical_pos = th.stack([command[0], command[1], body_pos[2]])
                 local_pos = T.relative_pose_transform(
-                    canonical_pos, th.tensor([0.0, 0.0, 0.0, 1.0]), body_pos, body_quat
+                    canonical_pos,
+                    command.new_tensor([0.0, 0.0, 0.0, 1.0]),
+                    body_pos,
+                    body_quat,
                 )[0]
-                command = th.tensor([local_pos[0], local_pos[1], delta_q])
+                command = th.stack([local_pos[0], local_pos[1], delta_q])
             action.append(ControllerView.reverse_preprocess_command(group_key, command))
         action = th.cat(action, dim=0)
         assert (
