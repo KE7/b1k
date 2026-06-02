@@ -4,7 +4,7 @@ import torch as th
 
 import omnigibson as og
 import omnigibson.lazy as lazy
-from omnigibson.macros import gm
+from omnigibson.macros import create_module_macros, gm
 from omnigibson.sensors.sensor_base import BaseSensor
 from omnigibson.systems.system_base import get_all_system_names
 from omnigibson.utils.constants import (
@@ -21,6 +21,15 @@ from omnigibson.utils.vision_utils import Remapper
 
 # Create module logger
 log = create_module_logger(module_name=__name__)
+
+# Create module macros that can be specified
+m = create_module_macros(module_path=__file__)
+
+# cap-x fix (headless OG 3.8.0 / Isaac 5.1): max number of extra renderer steps to take while
+# warming up the camera_params (OgnCameraParamsOpenCV) annotator out of its degenerate first-read
+# state (renderProductResolution == [0, 0]). Bounded so a genuinely stuck annotator can't spin
+# forever; a no-op once the annotator is warm so it adds no steady-state cost.
+m.MAX_CAMERA_PARAMS_WARMUP_RENDERS = 30
 
 
 class VisionSensor(BaseSensor):
@@ -674,8 +683,32 @@ class VisionSensor(BaseSensor):
             # Requires 4 render updates for camera params annotator to become active
             for _ in range(4):
                 og.sim.render()
+        # Grab the parameters
+        data = self._annotators["camera_params"].get_data()
+        # cap-x fix (headless OG 3.8.0 / Isaac 5.1): the camera_params (OgnCameraParamsOpenCV)
+        # annotator can return a stale/degenerate frame (renderProductResolution == [0, 0],
+        # null cameraProjection) on its first read even after the 4 warmup renders above. This
+        # is a flaky render-warmup race in headless mode (RGB on the same render product renders
+        # fine), and it makes `intrinsic_matrix` raise its degenerate-matrix assertion
+        # nondeterministically (observed on the R1Pro wrist realsense cameras). Step the renderer
+        # up to m.MAX_CAMERA_PARAMS_WARMUP_RENDERS extra times until the resolution is populated.
+        # No-op once warm, so this adds no steady-state cost.
+        def _camera_params_degenerate(d):
+            rp = d.get("renderProductResolution", None)
+            if rp is None:
+                return True
+            try:
+                return any(int(x) == 0 for x in rp)
+            except TypeError:
+                return True
+
+        _warmup_renders = 0
+        while _camera_params_degenerate(data) and _warmup_renders < m.MAX_CAMERA_PARAMS_WARMUP_RENDERS:
+            og.sim.render()
+            _warmup_renders += 1
+            data = self._annotators["camera_params"].get_data()
         # Grab and return the parameters
-        return self._annotators["camera_params"].get_data()
+        return data
 
     @property
     def viewer_visibility(self):
