@@ -53,7 +53,7 @@ command -v uv >/dev/null || {
 }
 
 python --version | grep -q "Python ${PYTHON_VERSION}" || {
-  echo "ERROR: Python ${PYTHON_VERSION} required (Isaac Sim wheels are cp310-only)"
+  echo "ERROR: Python ${PYTHON_VERSION} required (Isaac Sim 5.1 source build is cp311)"
   exit 1
 }
 
@@ -62,9 +62,53 @@ python --version | grep -q "Python ${PYTHON_VERSION}" || {
   exit 1
 }
 
+# =========================
+# Architecture gate
+# =========================
+# This installer is the aarch64 (DGX Spark / GB10) PORT: it REUSES a source-built
+# Isaac Sim 5.1 (cp311) and intentionally does NOT download the x86_64 cp310
+# Isaac Sim 4.5 wheels that the upstream installer uses. Those two flows differ in
+# Python version, Isaac version, and ISAAC_PATH handling, so we do NOT silently run
+# the aarch64 path on x86_64. Gate explicitly by architecture and fail loudly with a
+# pointer to the upstream wheel-based installer rather than silently mis-installing.
+ARCH="$(uname -m)"
+if [[ "$ARCH" != "aarch64" && "$ARCH" != "arm64" ]]; then
+  echo "ERROR: This is the aarch64 source-build port of uv_install.sh (Isaac Sim 5.1, cp311)."
+  echo "       Detected architecture: $ARCH (not aarch64)."
+  echo "       On x86_64, use the upstream/base uv_install.sh, which downloads the"
+  echo "       x86_64 cp310 Isaac Sim wheels from pypi.nvidia.com instead of reusing a"
+  echo "       source build. This script will not run on $ARCH to avoid a silent"
+  echo "       mis-install. Aborting."
+  exit 1
+fi
+
 # Isaac Sim env: on aarch64 we REUSE the source-built Isaac Sim 5.1 instead of
-# downloading x86_64 cp310 wheels, so ISAAC_PATH/EXP_PATH must be set (not an error).
-export ISAAC_PATH="${ISAAC_PATH:-/home/batman/Documents/open-source/isaacsim/_build/linux-aarch64/release}"
+# downloading x86_64 cp310 wheels, so ISAAC_PATH must point at a source-built Isaac
+# Sim 5.1 release tree. We do NOT hardcode any machine-specific/home path here.
+# Resolution order:
+#   1. ISAAC_PATH from the environment (preferred -- fully overridable + portable).
+#   2. Auto-detect a source build at a standard repo-relative location, if present.
+#   3. Otherwise FAIL with a clear, actionable message.
+if [[ -z "${ISAAC_PATH:-}" ]]; then
+  for _cand in \
+    "$WORKDIR/isaacsim/_build/linux-aarch64/release" \
+    "$WORKDIR/../isaacsim/_build/linux-aarch64/release"; do
+    if [[ -d "$_cand" ]]; then
+      ISAAC_PATH="$(cd "$_cand" && pwd)"
+      echo "Auto-detected source-built Isaac Sim at ISAAC_PATH=$ISAAC_PATH"
+      break
+    fi
+  done
+fi
+if [[ -z "${ISAAC_PATH:-}" ]]; then
+  echo "ERROR: ISAAC_PATH is not set and no source-built Isaac Sim was auto-detected."
+  echo "       On aarch64 we reuse a source-built Isaac Sim 5.1 release tree instead of"
+  echo "       downloading x86_64 wheels. Set ISAAC_PATH to your Isaac Sim release dir, e.g.:"
+  echo "         export ISAAC_PATH=/path/to/isaacsim/_build/linux-aarch64/release"
+  echo "       then re-run: ./uv_install.sh"
+  exit 1
+fi
+export ISAAC_PATH
 export EXP_PATH="${EXP_PATH:-$ISAAC_PATH/apps}"
 if [[ ! -d "$ISAAC_PATH" ]]; then
   echo "ERROR: ISAAC_PATH does not exist: $ISAAC_PATH"
