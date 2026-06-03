@@ -72,8 +72,7 @@ m.MAX_ATTEMPTS_FOR_SAMPLING_POSE_FOR_CORRECT_ROOM = 20
 m.MAX_ATTEMPTS_FOR_SAMPLING_POSE_IN_ROOM = 60
 m.MAX_ATTEMPTS_FOR_SAMPLING_PLACE_POSE = 50
 m.PREDICATE_SAMPLING_Z_OFFSET = 0.02
-m.BASE_POSE_SAMPLING_LOWER_BOUND = 0.45  # >= R1Pro chassis radius (~0.41 m): sampled base poses
-                                         # stand off the target instead of landing on/inside it
+m.BASE_POSE_SAMPLING_LOWER_BOUND = 0.0
 m.BASE_POSE_SAMPLING_UPPER_BOUND = 1.5
 
 m.GRASP_APPROACH_DISTANCE = 0.01
@@ -90,16 +89,6 @@ m.LOW_PRECISION_JOINT_POS_DIFF_THRESHOLD = 0.05
 m.JOINT_CONTROL_MIN_ACTION = 0.0
 m.MAX_ALLOWED_JOINT_ERROR_FOR_LINEAR_MOTION = math.radians(45)
 m.TIME_BEFORE_JOINT_STUCK_CHECK = 1.0
-
-# PRINCIPLED BASE-NAV FIX (replaces the former blanket ignore_all_obstacles workaround — see
-# baseik_fix_design.md §8). Root cause: the earlier failures were the base BODY landing inside the
-# support-furniture footprint (bad standoff: buffer 0.3 m < R1Pro chassis radius ~0.41 m). cuRobo
-# correctly refused that. The fix keeps the FULL-BODY BASE collision check ON and stands the base off
-# the furniture (standoff). Real walls / large furniture are still refused.
-# Escape hatch ONLY (default OFF for ALL models): force the old obstacle-blind BASE nav. No model is
-# auto-enabled — this exists solely as a reversible fallback, overridable per-instance via
-# StarterSemanticActionPrimitives(ignore_obstacles_for_base_nav=...).
-m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS = ()
 
 log = create_module_logger(module_name=__name__)
 
@@ -139,7 +128,6 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
         curobo_batch_size=3,
         debug_visual_marker=None,
         skip_curobo_initilization=False,
-        ignore_obstacles_for_base_nav=None,
     ):
         """
         Initializes a StarterSemanticActionPrimitives generator.
@@ -155,12 +143,6 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             curobo_batch_size (int): The batch size for curobo motion planning and collision checking. Defaults to 3.
             debug_visual_marker (PrimitiveObject): The object to use for debug visual markers. Defaults to None.
             skip_curobo_initilization (bool): Whether to skip curobo initialization. Defaults to False.
-            ignore_obstacles_for_base_nav (None or bool): Escape-hatch flag that forces the old
-                obstacle-blind BASE nav (see baseik_fix_design.md §8). This is NOT the default fix
-                path: when True, BASE-only nav planning ignores scene obstacles. When None (default)
-                it is OFF for all models (m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS is now empty);
-                base nav uses the principled standoff path with the full-body collision
-                check ON. Set True only as a reversible fallback.
         """
         log.warning(
             "The StarterSemanticActionPrimitive is a work-in-progress and is only provided as an example. "
@@ -188,14 +170,6 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             )
         )
 
-        # Escape-hatch flag (default OFF for all models): force the old obstacle-blind BASE nav.
-        # No model is auto-enabled — base nav uses the principled standoff path by default
-        # (see baseik_fix_design.md §8).
-        self._ignore_obstacles_for_base_nav = (
-            self.robot.model in m.IGNORE_BASE_NAV_OBSTACLES_DEFAULT_MODELS
-            if ignore_obstacles_for_base_nav is None
-            else ignore_obstacles_for_base_nav
-        )
         self._task_relevant_objects_only = task_relevant_objects_only
 
         self._enable_head_tracking = enable_head_tracking
@@ -1608,12 +1582,6 @@ class StarterSemanticActionPrimitives(BaseActionPrimitiveSet):
             self.debug_visual_marker.set_position_orientation(*pose_3d)
         target_pos = {self.robot.base_footprint_link_name: pose_3d[0]}
         target_quat = {self.robot.base_footprint_link_name: pose_3d[1]}
-
-        # Escape hatch ONLY (default False, no model auto-enabled): force the old obstacle-blind
-        # BASE nav. The principled default below keeps the full-body BASE collision check ON.
-        if self._ignore_obstacles_for_base_nav:
-            ignore_all_obstacles = True
-
         q_traj = self._plan_joint_motion(
             target_pos,
             target_quat,
